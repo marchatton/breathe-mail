@@ -1,0 +1,20 @@
+rules:
+  - id: no-client-fetch
+    message: Move data access to server action or /lib/api
+    severity: error
+    language: tsx
+    pattern: fetch($A)
+    constraints:
+      all:
+        - inside:
+            kind: Program
+            has:
+              kind: ExpressionStatement
+              has:
+                kind: StringLiteral
+                text: '"use client"'
+  - id: no-console-log
+    message: Use a logger or remove console.log
+    severity: warning
+    language: ts,tsx
+    pattern: console.log($$$)

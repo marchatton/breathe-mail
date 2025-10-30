@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "ignore": ["**/node_modules/**"],
+  "workspaces": {
+    "apps/web": {
+      "entry": ["app/**/*.tsx", "src/**/*.ts"]
+    },
+    "packages/lib/email": {
+      "entry": ["src/**/*.ts"]
+    }
+  }
+}

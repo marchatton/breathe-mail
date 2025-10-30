@@ -41,25 +41,28 @@ Bring the `(protected)/dashboard` experience in line with the archived Vercel we
 ## Implementation notes
 
 ### Service contracts & persistence
-- **Commands (`workspaceSnapshot.commands`)** → `packages/lib/email/src/fetchers/get-commands.ts` consuming `apps/web/app/api/v1/dashboard/commands/route.ts`; data lives in Postgres via Prisma `command_cards` + `command_actions` tables with a 30s `unstable_cache` tag per user.
-- **Insights (`workspaceSnapshot.insights`)** → `packages/lib/email/src/fetchers/get-insights.ts` hitting `apps/web/app/api/v1/dashboard/insights/route.ts`; proxy to external insights API (no local persistence) cached for 60s via `unstable_cache` keyed by workspace + locale.
-- **Calendar (`workspaceSnapshot.calendar`)** → `packages/lib/email/src/fetchers/get-calendar.ts` hitting `apps/web/app/api/v1/dashboard/calendar/route.ts`; read-through Graph API with refresh tokens in Postgres, no result persistence, 5 min cache to mask rate limits.
-- **Debrief stats (`workspaceSnapshot.debrief.statistics`)** → `packages/lib/email/src/fetchers/get-debrief.ts` hitting `apps/web/app/api/v1/dashboard/debrief/route.ts`; Prisma aggregates over Postgres materialized view refreshed every 5 min, 15s cache for UI snappiness.
-- **Follow ups (`workspaceSnapshot.debrief.followUps`)** → same `get-debrief` contract; persisted per thread in Postgres `follow_ups` table; expose `waitingSinceIso` from DB, derived labels server-side.
-- **Snoozed (`workspaceSnapshot.snoozed`)** → `packages/lib/email/src/fetchers/get-snoozed.ts` hitting `apps/web/app/api/v1/dashboard/snoozed/route.ts`; Postgres `snoozed_threads` table with Prisma, cache disabled to surface real-time unsnooze actions.
-- **Awaiting replies (`workspaceSnapshot.awaitingReplies`)** → `packages/lib/email/src/fetchers/get-awaiting.ts` hitting `apps/web/app/api/v1/dashboard/awaiting/route.ts`; Postgres `awaiting_replies` table, 30s cache; future webhook invalidation hooks.
+
+| Slice (`workspaceSnapshot.*`) | Server contract (`apps/web/server/dashboard`) | Shared client helper (`packages/lib/email`) | Persistence & source of truth | Cache & invalidation |
+| --- | --- | --- | --- | --- |
+| `commands` | `queries/commands.ts` orchestrates Prisma + policy guards before delegating to API route | `api/dashboard/commands.ts` exports `fetchCommands` returning `CommandCard[]` typed by schema | Postgres `command_cards` + `command_actions` via Prisma | `unstable_cache` (30s) keyed by workspace + actor; `revalidateTag('dashboard:commands')` on mutations |
+| `insights` | `queries/insights.ts` wraps external insights REST client, normalises errors | `api/dashboard/insights.ts` fetches from route + exposes typed errors | External insights API (no DB) | `unstable_cache` (60s) keyed by workspace + locale; manual bust on settings changes |
+| `calendar` | `queries/calendar.ts` exchanges refresh token for Microsoft Graph client | `api/dashboard/calendar.ts` for RSC consumption | Microsoft Graph + refresh tokens stored in Postgres `connected_accounts` | `unstable_cache` (5m) w/ tag `dashboard:calendar`; expire when webhook signals new events |
+| `debrief.statistics` | `queries/debrief.ts#getStatistics` reads Postgres materialized view refreshed by cron | `api/dashboard/debrief.ts` splits helpers `fetchDebriefStats` & `fetchFollowUps` | Postgres `dashboard_debrief_mv` refreshed every 5m | `unstable_cache` (15s) tag `dashboard:debrief` |
+| `debrief.followUps` | same module `getFollowUps` joining `follow_ups` table to threads | same client helper as stats | Postgres `follow_ups` table | Cache piggybacks on `dashboard:debrief`; invalidated by snooze/resolve mutations |
+| `snoozed` | `queries/snoozed.ts` ensures actor permissions before returning snoozed threads | `api/dashboard/snoozed.ts` exports `fetchSnoozed` | Postgres `snoozed_threads` | No response cache; rely on ISR revalidation via `revalidateTag('dashboard:snoozed')` |
+| `awaitingReplies` | `queries/awaiting.ts` composes Postgres view keyed by thread + contact SLA | `api/dashboard/awaiting.ts` for typed fetching | Postgres `awaiting_replies` view | `unstable_cache` (30s) tag `dashboard:awaiting`; invalidated on inbound message webhook |
 
 ### Validation & serialization
-- API routes validate request headers/session via `workspaceSessionSchema` (new) before delegating; responses pipe through the slice-specific Zod schemas exported from `packages/lib/email/src/schemas` and composed into `workspaceSnapshotSchema` for `/dashboard` hydration.
-- Introduce `packages/lib/email/src/serializers/dashboard.ts` with helpers `serializeCommand`, `serializeInsight`, etc. to coerce Prisma models into schema-friendly shapes (nullish → `null`, enums → Zod enums).
-- Add `packages/lib/email/src/utils/time.ts` with `formatRelativeTime(now, isoString)` and `formatDurationMinutes(totalMinutes)` that wrap `Intl.RelativeTimeFormat` + `Intl.DateTimeFormat`; reuse inside serializers so clients consume preformatted labels.
-- Client components replace ad-hoc formatting with values returned from serializers; only local transformation is display-only (e.g., clamp strings).
+- API routes wrap handlers with `withWorkspaceSession(workspaceSessionSchema)` (new) ensuring session + role Zod parsing before running query modules.
+- Each query returns raw domain entities that flow through `packages/lib/email/src/serializers/dashboard/*.ts` helpers (`serializeCommand`, `serializeInsight`, etc.) to coerce Prisma/external shapes into schema-safe objects. Serializers import `workspaceSnapshotSchema` slices to guarantee type fidelity.
+- Add `packages/lib/email/src/utils/time.ts` exporting `formatRelativeTime(now, isoString)` and `formatDurationMinutes(totalMinutes)` wrappers around `Intl.RelativeTimeFormat`/`Intl.DateTimeFormat`. Serializers produce ready-to-render strings; clients only clamp/truncate.
+- Extend `packages/lib/email/src/schemas.ts` with slice-level exports (`commandCardSchema`, etc.) so both API responses and MSW fixtures reuse identical validators.
 
 ### Testing strategy
-- Register MSW handlers per slice under `apps/web/test/mocks/handlers/dashboard.ts`, mirroring each API route with happy/error fixtures drawn from `packages/lib/email/src/fixtures` to keep parity.
-- Add Vitest suites beside API routes (e.g., `apps/web/app/api/v1/dashboard/commands/route.test.ts`) covering success + error paths (auth failure, external API timeout) with MSW interceptors.
-- Create contract tests in `packages/lib/email/src/__tests__/workspace-contract.test.ts` asserting that fixtures pass the Zod schemas and that API JSON payloads remain in sync by importing handlers' responses.
-- Wire contract tests into CI via `pnpm -r test` to ensure schema, spec, and fixtures evolve together; failing contract blocks UI merges.
+- Register MSW handlers per slice under `apps/web/test/mocks/handlers/dashboard.ts`, mirroring each API route with happy/error fixtures drawn from `packages/lib/email/src/fixtures`. Handlers should reuse serializers to avoid fixture drift.
+- Add Vitest suites beside API routes (e.g., `apps/web/app/api/v1/dashboard/commands/route.test.ts`) covering success, auth failure, upstream timeout, and cache tag invalidation hooks via mocked `revalidateTag`.
+- Create contract tests in `packages/lib/email/src/__tests__/workspace-contract.test.ts` asserting that serializers output values accepted by `workspaceSnapshotSchema` and matching MSW handler payloads. Include regression for relative-time formatting fallbacks.
+- Wire contract + route suites into CI via `pnpm -r test`; add a dedicated `pnpm -F web test:contracts` script for targeted runs during schema changes.
 
 ## Validation Checklist
 - Keyboard traversal hits skip link, sections, and cards in logical order; focus styles remain visible throughout.

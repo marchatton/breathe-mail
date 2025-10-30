@@ -38,6 +38,29 @@ Bring the `(protected)/dashboard` experience in line with the archived Vercel we
   6.1 Add a shared motion utility that switches to opacity-only fades when `prefers-reduced-motion: reduce` is active.
   6.2 Use the utility for future skeleton transitions and card hover/press states; avoid animating layout-affecting properties.
 
+## Implementation notes
+
+### Service contracts & persistence
+- **Commands (`workspaceSnapshot.commands`)** → `packages/lib/email/src/fetchers/get-commands.ts` consuming `apps/web/app/api/v1/dashboard/commands/route.ts`; data lives in Postgres via Prisma `command_cards` + `command_actions` tables with a 30s `unstable_cache` tag per user.
+- **Insights (`workspaceSnapshot.insights`)** → `packages/lib/email/src/fetchers/get-insights.ts` hitting `apps/web/app/api/v1/dashboard/insights/route.ts`; proxy to external insights API (no local persistence) cached for 60s via `unstable_cache` keyed by workspace + locale.
+- **Calendar (`workspaceSnapshot.calendar`)** → `packages/lib/email/src/fetchers/get-calendar.ts` hitting `apps/web/app/api/v1/dashboard/calendar/route.ts`; read-through Graph API with refresh tokens in Postgres, no result persistence, 5 min cache to mask rate limits.
+- **Debrief stats (`workspaceSnapshot.debrief.statistics`)** → `packages/lib/email/src/fetchers/get-debrief.ts` hitting `apps/web/app/api/v1/dashboard/debrief/route.ts`; Prisma aggregates over Postgres materialized view refreshed every 5 min, 15s cache for UI snappiness.
+- **Follow ups (`workspaceSnapshot.debrief.followUps`)** → same `get-debrief` contract; persisted per thread in Postgres `follow_ups` table; expose `waitingSinceIso` from DB, derived labels server-side.
+- **Snoozed (`workspaceSnapshot.snoozed`)** → `packages/lib/email/src/fetchers/get-snoozed.ts` hitting `apps/web/app/api/v1/dashboard/snoozed/route.ts`; Postgres `snoozed_threads` table with Prisma, cache disabled to surface real-time unsnooze actions.
+- **Awaiting replies (`workspaceSnapshot.awaitingReplies`)** → `packages/lib/email/src/fetchers/get-awaiting.ts` hitting `apps/web/app/api/v1/dashboard/awaiting/route.ts`; Postgres `awaiting_replies` table, 30s cache; future webhook invalidation hooks.
+
+### Validation & serialization
+- API routes validate request headers/session via `workspaceSessionSchema` (new) before delegating; responses pipe through the slice-specific Zod schemas exported from `packages/lib/email/src/schemas` and composed into `workspaceSnapshotSchema` for `/dashboard` hydration.
+- Introduce `packages/lib/email/src/serializers/dashboard.ts` with helpers `serializeCommand`, `serializeInsight`, etc. to coerce Prisma models into schema-friendly shapes (nullish → `null`, enums → Zod enums).
+- Add `packages/lib/email/src/utils/time.ts` with `formatRelativeTime(now, isoString)` and `formatDurationMinutes(totalMinutes)` that wrap `Intl.RelativeTimeFormat` + `Intl.DateTimeFormat`; reuse inside serializers so clients consume preformatted labels.
+- Client components replace ad-hoc formatting with values returned from serializers; only local transformation is display-only (e.g., clamp strings).
+
+### Testing strategy
+- Register MSW handlers per slice under `apps/web/test/mocks/handlers/dashboard.ts`, mirroring each API route with happy/error fixtures drawn from `packages/lib/email/src/fixtures` to keep parity.
+- Add Vitest suites beside API routes (e.g., `apps/web/app/api/v1/dashboard/commands/route.test.ts`) covering success + error paths (auth failure, external API timeout) with MSW interceptors.
+- Create contract tests in `packages/lib/email/src/__tests__/workspace-contract.test.ts` asserting that fixtures pass the Zod schemas and that API JSON payloads remain in sync by importing handlers' responses.
+- Wire contract tests into CI via `pnpm -r test` to ensure schema, spec, and fixtures evolve together; failing contract blocks UI merges.
+
 ## Validation Checklist
 - Keyboard traversal hits skip link, sections, and cards in logical order; focus styles remain visible throughout.
 - Target sizes validated via browser devtools (Chrome Lighthouse or manual measurement).

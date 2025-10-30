@@ -7,5 +7,9 @@ export default defineConfig({
     coverage: {
       reporter: ['text', 'html']
     }
+  },
+  esbuild: {
+    jsx: 'automatic',
+    jsxImportSource: 'react'
   }
 });

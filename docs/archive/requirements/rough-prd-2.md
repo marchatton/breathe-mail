@@ -328,7 +328,7 @@ If (`time_bound_hours <= 6` OR VIP OR high‑impact signal) AND `Final ≥ 70`, 
     "debrief": { "statistics": { "today": { "actionsResolved": 8 } } }
   }
   ```
-  Validation: `commandCardSchema` + `actionMetadataSchema` confirm the command still matches workspace contract before status flips to **resolved**. Side effects: mark command history row `actions_log` with `{action:"complete", actor:"dashboard"}` and trigger downstream sync to Gmail if applicable.
+  Validation: reuse `commandCardSchema` + `actionMetadataSchema` from `packages/lib/email/src/schemas.ts` to ensure the dashboard still presents an actionable command (correct `type`, score, deadline ISO) before flipping status to **resolved**. Side effects: record `{action:"complete", actor:"dashboard"}` in `actions_log`, bump workspace metrics, and trigger downstream Gmail sync when relevant labels change.
 
 * **POST `/api/v1/workspaces/{workspaceId}/follow-ups/{threadId}/nudge`**
   Headers: `Idempotency-Key: <uuid4>`
@@ -345,7 +345,7 @@ If (`time_bound_hours <= 6` OR VIP OR high‑impact signal) AND `Final ≥ 70`, 
     "followUp": { "threadId": "thr-42", "nudgedAtIso": "2025-01-10T14:25:00Z" }
   }
   ```
-  Validation: `followUpSchema` guards that the referenced thread exists in the Debrief snapshot and emails remain valid before emitting the nudge. Side effects: transition follow-up status to **nudged**, enqueue reminder delivery, and append `{action:"nudge", payload:{channel:"email"}}` to `actions_log`.
+  Validation: confirm the thread snapshot with `followUpSchema` (from `packages/lib/email/src/schemas.ts`) and enforce channel/message enums via a mutation-specific Zod object before emitting the nudge. Side effects: flip follow-up status to **nudged**, queue reminder delivery, and append `{action:"nudge", payload:{channel:"email"}}` to `actions_log`.
 
 * **POST `/api/v1/workspaces/{workspaceId}/awaiting-replies/{threadId}/snooze`**
   Headers: `Idempotency-Key: <uuid4>`
@@ -363,7 +363,7 @@ If (`time_bound_hours <= 6` OR VIP OR high‑impact signal) AND `Final ≥ 70`, 
     "snoozed": [ { "id": "ar-9", "snoozeUntilLabel": "Next Fri" } ]
   }
   ```
-  Validation: `awaitingReplySchema` ensures the original awaiting-reply entry is intact and email formatting is correct; snooze window parsed via Zod datetime check before status changes to **snoozed**. Side effects: persist snooze window, move record into `snoozed` collection for the workspace snapshot, and log `{action:"snooze", payload:{until:"..."}}`.
+  Validation: verify the source row with `awaitingReplySchema` from `packages/lib/email/src/schemas.ts`, then layer a `z.string().datetime()` guard over `snoozeUntilIso` before moving status to **snoozed**. Side effects: persist snooze window, migrate record into the Snoozed snapshot bucket, and log `{action:"snooze", payload:{until:"..."}}`.
 
 * **POST `/act/:id`**
   Body: `{"action":"done|snooze|not_urgent|mark_read|archive|reassign","lens?":"ops|..."}`
@@ -383,7 +383,7 @@ If (`time_bound_hours <= 6` OR VIP OR high‑impact signal) AND `Final ≥ 70`, 
   Fields: windows[], tz, vip_emails[], vip_domains[], prefs (e.g., `newsletter_auto_read=true`), telegram connect/disconnect.
 
 > Error handling (all new POST endpoints):
-> * `404` when workspace, command, or thread ids fail `commandCardSchema`/`followUpSchema`/`awaitingReplySchema` lookups → respond with “We couldn’t find that item.”
+> * `404` when workspace, command, or thread ids fail `commandCardSchema`/`followUpSchema`/`awaitingReplySchema` lookups (per `packages/lib/email/src/schemas.ts`) → respond with “We couldn’t find that item.”
 > * `409` if the item is already resolved/nudged/snoozed → respond with “This item was already updated.”
 > * `422` for payload validation failures (missing ISO timestamps, invalid channels/messages) → respond with “Please check the form and try again.”
 

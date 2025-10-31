@@ -1,37 +1,51 @@
-import type { ReactElement } from 'react';
-import { describe, expect, it } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
 import DashboardPage from './page';
 
-type Node = ReactElement & { props: { children?: unknown } };
+describe('Dashboard dashboard', () => {
+  it('exposes a skip link that targets the main dashboard content', () => {
+    render(<DashboardPage />);
 
-const collectElements = (node: unknown): ReactElement[] => {
-  if (!node || typeof node !== 'object') return [];
-  const element = node as Node;
-  const children = element.props?.children;
-  const nested = Array.isArray(children)
-    ? children.flatMap((child) => collectElements(child))
-    : collectElements(children);
-  return [element, ...nested];
-};
+    const skipLink = screen.getByRole('link', { name: /skip to main content/i });
+    const main = screen.getByRole('main');
 
-describe('DashboardPage accessibility affordances', () => {
-  const render = () => collectElements(DashboardPage());
-
-  it('renders a skip link targeting the main content', () => {
-    const nodes = render();
-    const skipLink = nodes.find((element) => element.type === 'a' && element.props.href === '#dashboard-main');
-    expect(skipLink?.props.children).toContain('Skip to main content');
+    expect(skipLink).toHaveAttribute('href', '#dashboard-content');
+    expect(main).toHaveAttribute('id', 'dashboard-content');
+    expect(skipLink.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('marks follow ups as a live region for async updates', () => {
-    const nodes = render();
-    const region = nodes.find((element) => element.props?.id === 'follow-ups');
-    expect(region?.props['aria-live']).toBe('polite');
+  it('renders actionable priority items as labelled buttons with urgency and deadlines', () => {
+    render(<DashboardPage />);
+
+    const priorityRegion = screen.getByRole('region', { name: /priority actions/i });
+    const buttons = within(priorityRegion).getAllByRole('button');
+
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const button of buttons) {
+      expect(button).toHaveAttribute('aria-label');
+      expect(button.getAttribute('aria-label')).not.toHaveLength(0);
+      expect(within(button).getByText(/due/i)).toBeInTheDocument();
+    }
   });
 
-  it('exposes actionable commands as buttons with descriptive labels', () => {
-    const nodes = render();
-    const commandButton = nodes.find((element) => element.type === 'button' && element.props['aria-label'] === 'Open Q4 Budget Approval Required');
-    expect(commandButton).toBeDefined();
+  it('marks dashboard statistic values with tabular number styling and associations', () => {
+    render(<DashboardPage />);
+
+    const todayRegion = screen.getByRole('region', { name: /today/i });
+    const statValues = todayRegion.querySelectorAll('dd.tabular-nums');
+
+    expect(statValues.length).toBeGreaterThan(0);
+    statValues.forEach((value) => {
+      expect(value.getAttribute('aria-describedby')).toBeTruthy();
+    });
+  });
+
+  it('wraps follow-up lists with aria-live polite regions', () => {
+    render(<DashboardPage />);
+
+    const followUpsRegion = screen.getByRole('region', { name: /follow ups/i });
+    const awaitingRegion = screen.getByRole('region', { name: /awaiting replies/i });
+
+    expect(followUpsRegion.querySelector('[aria-live="polite"]')).not.toBeNull();
+    expect(awaitingRegion.querySelector('[aria-live="polite"]')).not.toBeNull();
   });
 });

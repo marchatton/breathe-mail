@@ -311,6 +311,60 @@ If (`time_bound_hours <= 6` OR VIP OR high‑impact signal) AND `Final ≥ 70`, 
 
 ### Actions
 
+* **POST `/api/v1/workspaces/{workspaceId}/commands/{commandId}/complete`**
+  Headers: `Idempotency-Key: <uuid4>`
+  Body:
+  ```json
+  {
+    "actionMetadata": ActionMetadata,
+    "completedAtIso": "2025-01-10T14:25:00Z",
+    "note": "Paid via Stripe"
+  }
+  ```
+  → Returns `200` with optimistic fragment so the client can drop the card and increment dashboard counters:
+  ```json
+  {
+    "command": { "id": "cmd-123", "status": "resolved" },
+    "debrief": { "statistics": { "today": { "actionsResolved": 8 } } }
+  }
+  ```
+  Validation: reuse `commandCardSchema` + `actionMetadataSchema` from `packages/lib/email/src/schemas.ts` to ensure the dashboard still presents an actionable command (correct `type`, score, deadline ISO) before flipping status to **resolved**. Side effects: record `{action:"complete", actor:"dashboard"}` in `actions_log`, bump workspace metrics, and trigger downstream Gmail sync when relevant labels change.
+
+* **POST `/api/v1/workspaces/{workspaceId}/follow-ups/{threadId}/nudge`**
+  Headers: `Idempotency-Key: <uuid4>`
+  Body:
+  ```json
+  {
+    "reminderChannel": "email",
+    "message": "Just checking in on next steps."
+  }
+  ```
+  → Returns `202` with optimistic fragment allowing the UI to label the follow-up as nudged and surface the new reminder timestamp:
+  ```json
+  {
+    "followUp": { "threadId": "thr-42", "nudgedAtIso": "2025-01-10T14:25:00Z" }
+  }
+  ```
+  Validation: confirm the thread snapshot with `followUpSchema` (from `packages/lib/email/src/schemas.ts`) and enforce channel/message enums via a mutation-specific Zod object before emitting the nudge. Side effects: flip follow-up status to **nudged**, queue reminder delivery, and append `{action:"nudge", payload:{channel:"email"}}` to `actions_log`.
+
+* **POST `/api/v1/workspaces/{workspaceId}/awaiting-replies/{threadId}/snooze`**
+  Headers: `Idempotency-Key: <uuid4>`
+  Body:
+  ```json
+  {
+    "snoozeUntilIso": "2025-01-17T09:00:00Z",
+    "reason": "Waiting for vendor availability"
+  }
+  ```
+  → Returns `200` with optimistic fragment so the client can move the thread to the Snoozed panel while showing the updated badge:
+  ```json
+  {
+    "awaitingReply": { "id": "ar-9", "status": "snoozed", "snoozeUntilIso": "2025-01-17T09:00:00Z" },
+    "snoozed": [ { "id": "ar-9", "snoozeUntilLabel": "Next Fri" } ]
+  }
+  ```
+  Validation: verify the source row with `awaitingReplySchema` from `packages/lib/email/src/schemas.ts`, then layer a `z.string().datetime()` guard over `snoozeUntilIso` before moving status to **snoozed**. Side effects: persist snooze window, migrate record into the Snoozed snapshot bucket, and log `{action:"snooze", payload:{until:"..."}}`.
+
 * **POST `/act/:id`**
   Body: `{"action":"done|snooze|not_urgent|mark_read|archive|reassign","lens?":"ops|..."}`
   → 200 with updated card (or 204).
@@ -327,6 +381,11 @@ If (`time_bound_hours <= 6` OR VIP OR high‑impact signal) AND `Final ≥ 70`, 
 
 * **GET `/settings`** / **PATCH `/settings`**
   Fields: windows[], tz, vip_emails[], vip_domains[], prefs (e.g., `newsletter_auto_read=true`), telegram connect/disconnect.
+
+> Error handling (all new POST endpoints):
+> * `404` when workspace, command, or thread ids fail `commandCardSchema`/`followUpSchema`/`awaitingReplySchema` lookups (per `packages/lib/email/src/schemas.ts`) → respond with “We couldn’t find that item.”
+> * `409` if the item is already resolved/nudged/snoozed → respond with “This item was already updated.”
+> * `422` for payload validation failures (missing ISO timestamps, invalid channels/messages) → respond with “Please check the form and try again.”
 
 ---
 

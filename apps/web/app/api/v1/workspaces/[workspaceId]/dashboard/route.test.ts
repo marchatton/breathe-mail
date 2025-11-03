@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 
 import { workspaceFixture } from '../../../../../../../../packages/lib/email/src/fixtures';
+import * as dashboardModule from '../../../../../../server/dashboard';
+import { DashboardAccessError } from '../../../../../../server/dashboard';
 import { GET } from './route';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const expectedMeta = {
   commands: { updatedAt: '2025-01-23T17:05:00Z' },
@@ -78,6 +84,63 @@ describe('GET /api/v1/workspaces/:workspaceId/dashboard', () => {
         details: {
           invalid: ['commands_updated_after']
         }
+      }
+    });
+  });
+
+  it('returns 412 when validators are stale', async () => {
+    const request = new Request('http://localhost/api/v1/workspaces/demo/dashboard', {
+      headers: { 'if-match': '"outdated"' }
+    });
+
+    const response = await GET(request, { params: { workspaceId: 'demo' } });
+
+    expect(response.status).toBe(412);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'precondition_failed',
+        message: 'Precondition failed for the provided validators.',
+        details: {
+          expectedEtag: expectedEtag
+        }
+      }
+    });
+  });
+
+  it('returns 401 when the session is missing', async () => {
+    vi.spyOn(dashboardModule, 'getWorkspaceDashboard').mockImplementation(() => {
+      throw new DashboardAccessError(401, 'unauthorized', 'Session missing or expired.');
+    });
+
+    const response = await GET(new Request('http://localhost/api/v1/workspaces/demo/dashboard'), {
+      params: { workspaceId: 'demo' }
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'unauthorized',
+        message: 'Session missing or expired.',
+        details: null
+      }
+    });
+  });
+
+  it('returns 403 when workspace access is forbidden', async () => {
+    vi.spyOn(dashboardModule, 'getWorkspaceDashboard').mockImplementation(() => {
+      throw new DashboardAccessError(403, 'forbidden', 'You do not have access to this workspace.');
+    });
+
+    const response = await GET(new Request('http://localhost/api/v1/workspaces/demo/dashboard'), {
+      params: { workspaceId: 'demo' }
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'forbidden',
+        message: 'You do not have access to this workspace.',
+        details: null
       }
     });
   });

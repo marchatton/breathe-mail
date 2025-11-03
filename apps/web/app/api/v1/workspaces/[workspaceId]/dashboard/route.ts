@@ -1,6 +1,26 @@
 import { createHash } from 'node:crypto';
 
-import { getWorkspaceDashboard, type DashboardMeta } from '../../../../../../server/dashboard';
+import {
+  DashboardAccessError,
+  getWorkspaceDashboard,
+  type DashboardMeta,
+  type WorkspaceDashboard,
+  type WorkspaceSnapshot
+} from '../../../../../../server/dashboard';
+import { workspaceSnapshotSchema } from '../../../../../../../../packages/lib/email/src/schemas';
+
+type DashboardResponseBody = {
+  data: WorkspaceSnapshot;
+  meta: DashboardMeta;
+};
+
+type ErrorResponseBody = {
+  error: {
+    code: string;
+    message: string;
+    details: Record<string, unknown> | null;
+  };
+};
 
 type RouteContext = {
   params: { workspaceId: string };
@@ -61,7 +81,7 @@ function evaluateRefresh(url: URL, meta: DashboardMeta): RefreshEvaluation {
   return { invalid, requestedCount, hasChanges };
 }
 
-function jsonResponse<T>(body: T, status: number, headers?: HeadersInit) {
+function jsonResponse<T>(body: T, status: number, headers?: HeadersInit): Response {
   return Response.json(body, { status, headers });
 }
 
@@ -70,27 +90,37 @@ function errorResponse(
   code: string,
   message: string,
   details: Record<string, unknown> | null = null
-) {
-  return jsonResponse(
-    {
-      error: {
-        code,
-        message,
-        details
-      }
-    },
-    status
-  );
+): Response {
+  const body: ErrorResponseBody = {
+    error: {
+      code,
+      message,
+      details
+    }
+  };
+
+  return jsonResponse(body, status);
 }
 
 export async function GET(request: Request, { params }: RouteContext) {
-  const workspace = getWorkspaceDashboard(params.workspaceId);
+  let workspace: WorkspaceDashboard | null;
+
+  try {
+    workspace = getWorkspaceDashboard(params.workspaceId);
+  } catch (error) {
+    if (error instanceof DashboardAccessError) {
+      return errorResponse(error.status, error.code, error.message, error.details);
+    }
+
+    throw error;
+  }
 
   if (!workspace) {
     return errorResponse(404, 'workspace_not_found', 'Workspace missing or inaccessible.');
   }
 
   const { data, meta } = workspace;
+  const validatedData = workspaceSnapshotSchema.parse(data);
   const url = new URL(request.url);
   const refreshEvaluation = evaluateRefresh(url, meta);
 
@@ -143,12 +173,10 @@ export async function GET(request: Request, { params }: RouteContext) {
     return new Response(null, { status: 304, headers: baseHeaders });
   }
 
-  return jsonResponse(
-    {
-      data,
-      meta
-    },
-    200,
-    baseHeaders
-  );
+  const responseBody: DashboardResponseBody = {
+    data: validatedData,
+    meta
+  };
+
+  return jsonResponse(responseBody, 200, baseHeaders);
 }

@@ -1,5 +1,27 @@
 import { workspaceFixture } from '../../../packages/lib/email/src/fixtures';
 import type { WorkspaceSnapshot } from '../../../packages/lib/email/src/schemas';
+export type { WorkspaceSnapshot } from '../../../packages/lib/email/src/schemas';
+
+export type DashboardAccessErrorCode = 'unauthorized' | 'forbidden' | 'workspace_not_found';
+
+export class DashboardAccessError extends Error {
+  readonly status: 401 | 403 | 404;
+  readonly code: DashboardAccessErrorCode;
+  readonly details: Record<string, unknown> | null;
+
+  constructor(
+    status: DashboardAccessError['status'],
+    code: DashboardAccessErrorCode,
+    message: string,
+    details: Record<string, unknown> | null = null
+  ) {
+    super(message);
+    this.name = 'DashboardAccessError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
 
 export type DashboardMeta = {
   commands: { updatedAt: string };

@@ -12,7 +12,14 @@ const expectedMeta = {
   snoozed: { updatedAt: '2025-01-23T09:30:00Z' }
 };
 
-const expectedEtag = `"${createHash('sha256').update(JSON.stringify(expectedMeta)).digest('hex')}"`;
+const expectedEtag = `"${createHash('sha256')
+  .update(
+    Object.entries(expectedMeta)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([key, slice]) => `${key}:${slice.updatedAt}`)
+      .join('|')
+  )
+  .digest('hex')}"`;
 
 const expectedLastModified = new Date(
   Math.max(...Object.values(expectedMeta).map((slice) => Date.parse(slice.updatedAt)))
@@ -43,6 +50,34 @@ describe('GET /api/v1/workspaces/:workspaceId/dashboard', () => {
     url.searchParams.set('snoozed_updated_after', expectedMeta.snoozed.updatedAt);
 
     const response = await GET(new Request(url), { params: { workspaceId: 'demo' } });
+
+    expect(response.status).toBe(304);
+    expect(response.headers.get('etag')).toBe(expectedEtag);
+    expect(response.headers.get('last-modified')).toBe(expectedLastModified);
+  });
+
+  it('returns 304 when If-None-Match includes the current validator', async () => {
+    const request = new Request('http://localhost/api/v1/workspaces/demo/dashboard', {
+      headers: {
+        'if-none-match': `W/${expectedEtag}, "some-other-etag"`
+      }
+    });
+
+    const response = await GET(request, { params: { workspaceId: 'demo' } });
+
+    expect(response.status).toBe(304);
+    expect(response.headers.get('etag')).toBe(expectedEtag);
+    expect(response.headers.get('last-modified')).toBe(expectedLastModified);
+  });
+
+  it('returns 304 when If-Modified-Since is up to date', async () => {
+    const request = new Request('http://localhost/api/v1/workspaces/demo/dashboard', {
+      headers: {
+        'if-modified-since': expectedLastModified
+      }
+    });
+
+    const response = await GET(request, { params: { workspaceId: 'demo' } });
 
     expect(response.status).toBe(304);
     expect(response.headers.get('etag')).toBe(expectedEtag);

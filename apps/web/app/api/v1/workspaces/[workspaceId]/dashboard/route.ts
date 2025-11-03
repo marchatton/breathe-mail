@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 
 import { getWorkspaceDashboard, type DashboardMeta } from '../../../../../../server/dashboard';
+import {
+  guardWorkspaceAccess,
+  isWorkspaceAuthFailure
+} from '../../../../../../server/middleware/auth';
 
 type RouteContext = {
   params: { workspaceId: string };
@@ -88,6 +92,12 @@ export async function GET(request: Request, { params }: RouteContext) {
 
   if (!workspace) {
     return errorResponse(404, 'workspace_not_found', 'Workspace missing or inaccessible.');
+  }
+
+  const authResult = await guardWorkspaceAccess(request, params.workspaceId);
+
+  if (isWorkspaceAuthFailure(authResult)) {
+    return authResult.response;
   }
 
   const { data, meta } = workspace;

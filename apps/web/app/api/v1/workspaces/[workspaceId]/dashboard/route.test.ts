@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 
 import { workspaceFixture } from '../../../../../../../../packages/lib/email/src/fixtures';
 import { GET } from './route';
+import {
+  registerSessionResolver,
+  resetSessionResolver,
+  type Session
+} from '../../../../../../server/middleware/auth';
 
 const expectedMeta = {
   commands: { updatedAt: '2025-01-23T17:05:00Z' },
@@ -17,6 +22,10 @@ const expectedEtag = `"${createHash('sha256').update(JSON.stringify(expectedMeta
 const expectedLastModified = new Date(
   Math.max(...Object.values(expectedMeta).map((slice) => Date.parse(slice.updatedAt)))
 ).toUTCString();
+
+afterEach(() => {
+  resetSessionResolver();
+});
 
 describe('GET /api/v1/workspaces/:workspaceId/dashboard', () => {
   it('returns the workspace snapshot with meta and cache headers', async () => {
@@ -60,6 +69,47 @@ describe('GET /api/v1/workspaces/:workspaceId/dashboard', () => {
         code: 'workspace_not_found',
         message: 'Workspace missing or inaccessible.',
         details: null
+      }
+    });
+  });
+
+  it('returns 401 when no session is resolved', async () => {
+    registerSessionResolver(async () => null);
+
+    const response = await GET(new Request('http://localhost/api/v1/workspaces/demo/dashboard'), {
+      params: { workspaceId: 'demo' }
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'unauthenticated',
+        message: 'Sign-in required to access this resource.',
+        details: null
+      }
+    });
+  });
+
+  it('returns 403 when session cannot access the workspace', async () => {
+    const session: Session = {
+      userId: 'demo-user',
+      email: 'demo@breathe.mail',
+      workspaceIds: ['other'],
+      activeWorkspaceId: 'other'
+    };
+
+    registerSessionResolver(async () => session);
+
+    const response = await GET(new Request('http://localhost/api/v1/workspaces/demo/dashboard'), {
+      params: { workspaceId: 'demo' }
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'workspace_forbidden',
+        message: 'You do not have access to this workspace.',
+        details: { workspaceId: 'demo' }
       }
     });
   });

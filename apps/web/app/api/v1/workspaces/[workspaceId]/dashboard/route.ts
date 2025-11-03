@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 
-import { getWorkspaceDashboard, type DashboardMeta } from '../../../../../../server/dashboard';
+import {
+  createInMemoryWorkspaceDashboardStore,
+  createWorkspaceDashboardService,
+  type DashboardMeta
+} from '../../../../../../server/workspaces/dashboard-service';
 
 type RouteContext = {
   params: { workspaceId: string };
@@ -83,8 +87,11 @@ function errorResponse(
   );
 }
 
+const workspaceDashboardStore = createInMemoryWorkspaceDashboardStore();
+const workspaceDashboardService = createWorkspaceDashboardService(workspaceDashboardStore);
+
 export async function GET(request: Request, { params }: RouteContext) {
-  const workspace = getWorkspaceDashboard(params.workspaceId);
+  const workspace = workspaceDashboardService.getDashboard(params.workspaceId);
 
   if (!workspace) {
     return errorResponse(404, 'workspace_not_found', 'Workspace missing or inaccessible.');

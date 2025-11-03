@@ -248,13 +248,16 @@ export default function DashboardPage() {
               </div>
 
               <div
-                aria-labelledby="follow-ups-heading"
+                aria-labelledby="follow-ups-region-heading"
                 aria-live="polite"
                 className="space-y-3"
                 id="follow-ups"
                 role="region"
               >
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400" id="follow-ups-heading">
+                <h3
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-400"
+                  id="follow-ups-region-heading"
+                >
                   Follow ups
                 </h3>
                 <ul className="space-y-2">
@@ -351,13 +354,16 @@ export default function DashboardPage() {
           title="Awaiting Replies"
         >
           <div
-            aria-labelledby="awaiting-replies-heading"
+            aria-labelledby="awaiting-replies-region-heading"
             aria-live="polite"
             className="space-y-3"
             id="awaiting-replies-region"
             role="region"
           >
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400" id="awaiting-replies-heading">
+            <h3
+              className="text-xs font-semibold uppercase tracking-wide text-slate-400"
+              id="awaiting-replies-region-heading"
+            >
               Threads on hold
             </h3>
             <ul className="grid gap-3 sm:grid-cols-2">

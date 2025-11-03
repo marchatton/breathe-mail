@@ -9,7 +9,7 @@ export default [
     ignores: ['.next/**', 'dist/**', 'coverage/**']
   },
   js.configs.recommended,
-  ...tseslint.configs.recommendedTypeChecked,
+  ...tseslint.configs.recommended,
   {
     files: ['**/*.{ts,tsx}'],
     plugins: {

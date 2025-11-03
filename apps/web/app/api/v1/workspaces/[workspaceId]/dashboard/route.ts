@@ -27,7 +27,12 @@ const REFRESH_PARAM_MAP: Record<keyof DashboardMeta, string> = {
 const CACHE_CONTROL_HEADER = 'private, max-age=0, must-revalidate';
 
 function computeEtag(meta: DashboardMeta): string {
-  return `"${createHash('sha256').update(JSON.stringify(meta)).digest('hex')}"`;
+  const digestSource = (Object.keys(meta) as (keyof DashboardMeta)[])
+    .sort()
+    .map((key) => `${key}:${meta[key]?.updatedAt ?? ''}`)
+    .join('|');
+
+  return `"${createHash('sha256').update(digestSource).digest('hex')}"`;
 }
 
 function computeLastModified(meta: DashboardMeta): Date {
@@ -35,7 +40,19 @@ function computeLastModified(meta: DashboardMeta): Date {
     .map((slice) => Date.parse(slice.updatedAt))
     .filter((value): value is number => Number.isFinite(value));
 
+  if (timestamps.length === 0) {
+    return new Date(0);
+  }
+
   return new Date(Math.max(...timestamps));
+}
+
+function parseIfNoneMatch(header: string): string[] {
+  return header
+    .split(',')
+    .map((candidate) => candidate.trim())
+    .filter((candidate) => candidate.length > 0)
+    .map((candidate) => (candidate.startsWith('W/') ? candidate.slice(2) : candidate));
 }
 
 function evaluateRefresh(url: URL, meta: DashboardMeta): RefreshEvaluation {
@@ -137,8 +154,11 @@ export async function GET(request: Request, { params }: RouteContext) {
   }
 
   const ifNoneMatch = request.headers.get('if-none-match');
-  if (ifNoneMatch && ifNoneMatch === etag) {
-    return new Response(null, { status: 304, headers: baseHeaders });
+  if (ifNoneMatch) {
+    const validators = parseIfNoneMatch(ifNoneMatch);
+    if (validators.includes('*') || validators.includes(etag)) {
+      return new Response(null, { status: 304, headers: baseHeaders });
+    }
   }
 
   const ifModifiedSince = request.headers.get('if-modified-since');
